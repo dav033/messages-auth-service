@@ -3,105 +3,125 @@ const User_auth = require("../models/authentication.users.model");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 
+class CustomError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
 const getAllUsers = async () => {
-  return await User_auth.findAll();
+  try {
+    return await User_auth.findAll();
+  } catch (error) {
+    console.error("Error fetching all users", error);
+    throw new CustomError(500, "Error fetching all users");
+  }
 };
 
 const createSessionToken = async (userId) => {
   try {
-    const payload = {
-      userId: userId,
-    };
-    const token = jwt.sign(payload, process.env.JWT_SECRET);
-    return token;
+    const payload = { userId };
+    return jwt.sign(payload, process.env.JWT_SECRET);
   } catch (error) {
-    console.log("Error al crear el token", error);
-    throw new Error("Error al crear el token");
+    console.error("Error creating session token", error);
+    throw new CustomError(500, "Error creating session token");
   }
 };
 
 const verifySessionToken = async (token) => {
-  return jwt.verify(token, process.env.JWT_SECRET);
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    console.error("Error verifying session token", error);
+    throw new CustomError(401, "Invalid session token");
+  }
 };
 
 const encryptPassword = async (password) => {
   try {
-    console.log("PASSWORD, ", password + "UWU");
     const salt = await bcrypt.genSalt(10);
     return await bcrypt.hash(password, salt);
   } catch (error) {
-    console.log("Error al encriptar la contraseña", error);
-    throw new Error("Error al encriptar la contraseña");
+    console.error("Error encrypting password", error);
+    throw new CustomError(500, "Error encrypting password");
   }
 };
 
 const decryptPassword = async (password, encryptedPassword) => {
-  return await bcrypt.compare(password, encryptedPassword);
+  try {
+    return await bcrypt.compare(password, encryptedPassword);
+  } catch (error) {
+    console.error("Error decrypting password", error);
+    throw new CustomError(500, "Error decrypting password");
+  }
 };
 
 const createUser = async (user) => {
-  console.log("USUEr", user.password);
-  const encryptedPassword = await encryptPassword(user.password);
-  console.log(encryptedPassword, "ENCRYPTED");
+  try {
+    const encryptedPassword = await encryptPassword(user.password);
+    const newUser = await User_auth.create({
+      id: user.id,
+      password: encryptedPassword,
+    });
+    const token = await createSessionToken(newUser.id);
 
-  const userr = await User_auth.create({
-    id: user.id,  
-    password: encryptedPassword,
-  });
-
-  const response = await createSessionToken(userr.id);
-
-  return {
-    token: response,
-    id: userr.id,
-    name: user.name,
-    profileImage: user.profileImage,
-    temporal: false,
-  };
+    return {
+      token,
+      id: newUser.id,
+      name: user.name,
+      profileImage: user.profileImage,
+      temporal: false,
+    };
+  } catch (error) {
+    console.error("Error creating user", error);
+    throw new CustomError(500, "Error creating user");
+  }
 };
 
 const login = async (name, password) => {
   try {
-    const user_information = await axios.get(
+    const userResponse = await axios.get(
       `http://localhost:4000/users/get_user_by_name`,
-      {
-        params: {
-          name: name,
-        },
-      }
+      { params: { name } }
     );
 
-    console.log("USER", user_information.data);
-
-    if (!user_information) {
-      throw new Error("Usuario no encontrado");
+    if (!userResponse.data) {
+      throw new CustomError(404, "Usuario no encontrado");
     }
 
     const user = await User_auth.findOne({
-      where: {
-        id: user_information.data.id,
-      },
+      where: { id: userResponse.data.id },
     });
+
+    if (!user) {
+      throw new CustomError(404, "Usuario no encontrado en la base de datos");
+    }
 
     const isPasswordCorrect = await decryptPassword(password, user.password);
 
-    console.log("UWU", isPasswordCorrect);
     if (!isPasswordCorrect) {
-      throw new Error("Contraseña incorrecta");
+      throw new CustomError(401, "Contraseña incorrecta");
     }
 
     const token = await createSessionToken(user.id);
 
     return {
-      token: token,
-      id: user_information.data.id,
-      name: user_information.data.name,
-      profileImage: user_information.data.profileImage,
+      token,
+      id: userResponse.data.id,
+      name: userResponse.data.name,
+      profileImage: userResponse.data.profileImage,
       temporal: false,
     };
   } catch (error) {
-    console.log("Error al iniciar sesión", error);
-    throw new Error("Error al iniciar sesión");
+    console.error("Error logging in", error);
+    if (error.response && error.response.status) {
+      throw new CustomError(error.response.status, error.response.data.message);
+    } else if (error instanceof CustomError) {
+      throw error;
+    } else {
+      throw new CustomError(500, "Error logging in");
+    }
   }
 };
 
@@ -109,6 +129,9 @@ module.exports = {
   getAllUsers,
   createSessionToken,
   verifySessionToken,
+  encryptPassword,
+  decryptPassword,
   createUser,
   login,
+  CustomError,
 };
